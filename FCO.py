@@ -6,303 +6,201 @@ import pandas as pd
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-DATA_DIR = "results_data_FGO"
+res_path = "results data FGO"
 
-def initialization(search_agents_no, dim, ub, lb):
-
-    ub = np.array(ub).flatten()
-    lb = np.array(lb).flatten()
-    boundary_no = len(ub)
-
-    if boundary_no == 1:
-        positions = np.random.rand(search_agents_no, dim) * (ub[0] - lb[0]) + lb[0]
+def init_pop(N, D, u, l):
+    u = np.array(u).flatten()
+    l = np.array(l).flatten()
+    if len(u) == 1:
+        pos = np.random.rand(N, D) * (u[0] - l[0]) + l[0]
     else:
-        positions = np.zeros((search_agents_no, dim))
-        for i in range(dim):
-            ub_i = ub[i]
-            lb_i = lb[i]
-            positions[:, i] = np.random.rand(search_agents_no) * (ub_i - lb_i) + lb_i
-    return positions
+        pos = np.zeros((N, D))
+        for i in range(D):
+            pos[:, i] = np.random.rand(N) * (u[i] - l[i]) + l[i]
+    return pos
 
 
-def get_functions_details_cec(func_id):
-    """
-    获取CEC2014函数的边界信息
-    """
-    dim = 10
-    if func_id == 11:
-        lb = -600 * np.ones(dim)
-        ub = 600 * np.ones(dim)
+def get_bound(fid):
+    D = 10
+    if fid == 11:
+        l = -600 * np.ones(D)
+        u = 600 * np.ones(D)
     else:
-        lb = -100 * np.ones(dim)
-        ub = 100 * np.ones(dim)
-    return lb, ub, dim
+        l = -100 * np.ones(D)
+        u = 100 * np.ones(D)
+    return l, u, D
 
 
-def save_data_to_csv(func_id, convergence_curves, run_no):
-
-    # 找出最大长度
-    if not convergence_curves:
+def save_csv(fid, curves, runs):
+    if not curves:
         return
-
-    max_len = max(len(c) for c in convergence_curves)
-
-    # 填充数据
-    padded_curves = []
-    for curve in convergence_curves:
-        if len(curve) < max_len:
-            padded = np.pad(curve, (0, max_len - len(curve)), 'edge')
-            padded_curves.append(padded)
+    mlen = max(len(c) for c in curves)
+    p_curves = []
+    for c in curves:
+        if len(c) < mlen:
+            pad = np.pad(c, (0, mlen - len(c)), 'edge')
+            p_curves.append(pad)
         else:
-            padded_curves.append(curve)
+            p_curves.append(c)
 
-    data = np.array(padded_curves).T
-
-    columns = [f'Run_{i + 1}' for i in range(run_no)]
-    df = pd.DataFrame(data, columns=columns)
-
-    df.index.name = 'Generation'
-
-    # 保存文件
-    filename = os.path.join(DATA_DIR, f'FGO_F{func_id:02d}_Raw_Data.csv')
-    df.to_csv(filename)
+    dat = np.array(p_curves).T
+    cols = [f'Run_{i + 1}' for i in range(runs)]
+    df = pd.DataFrame(dat, columns=cols)
+    df.index.name = 'Gen'
+    fname = os.path.join(res_path, f'FGO_F{fid:02d}_Raw.csv')
+    df.to_csv(fname)
+    print(f"Saved: {fname}")
 
 
-# FGO
-def FGO(pop_size, max_fes, ub, lb, dim, fobj, cec_instance):
+def fgo_algo(N, max_e, u, l, D, obj_f, cec):
+    u = np.array(u).flatten()
+    l = np.array(l).flatten()
+    if len(u) == 1: u = np.full(D, u[0])
+    if len(l) == 1: l = np.full(D, l[0])
 
-    # 边界处理
-    ub = np.array(ub).flatten()
-    lb = np.array(lb).flatten()
-    if len(ub) == 1: ub = np.full(dim, ub[0])
-    if len(lb) == 1: lb = np.full(dim, lb[0])
+    g_best = np.zeros(D)
+    g_val = np.inf
+    curve = []
 
-    # 初始化
-    gb_sol = np.zeros(dim)
-    gb_fit = np.inf
-    conv_curve = []
+    X = init_pop(N, D, u, l)
+    fit = np.zeros(N)
 
-    Ep = 0.7  # 环境概率
+    evals = 0
+    for i in range(N):
+        fit[i] = cec.evaluate(X[i, :], obj_f)
+        evals += 1
+        if fit[i] < g_val:
+            g_val = fit[i]
+            g_best = X[i, :].copy()
 
-    X = initialization(pop_size, dim, ub, lb)
-    fitness = np.zeros(pop_size)
+    curve.append(g_val)
 
-    # 初始评估
-    evaluations = 0
-    for i in range(pop_size):
-        fitness[i] = cec_instance.evaluate(X[i, :], fobj)
-        evaluations += 1
-        if fitness[i] < gb_fit:
-            gb_fit = fitness[i]
-            gb_sol = X[i, :].copy()
+    m_iter = max_e / N
+    curr = 0
+    Ep = 0.7
 
-    # 记录初始状态
-    conv_curve.append(gb_fit)
-
-    # 计算最大迭代次数
-    max_iter = max_fes / pop_size
-    current_iter = 0
-
-    # 主循环
-    while evaluations < max_fes:
-        current_iter += 1
-
-        # 环境因子 E
-        E = 1 - (current_iter / max_iter)
-
+    while evals < max_e:
+        curr += 1
+        E = 1 - (curr / m_iter)
         X_new = X.copy()
 
-        for i in range(pop_size):
-            # 随机选择 a, b, c
-            candidates = list(range(pop_size))
-            candidates.remove(i)
-            # 确保样本足够
-            if len(candidates) >= 3:
-                a, b, c = np.random.choice(candidates, 3, replace=False)
+        for i in range(N):
+            idxs = list(range(N))
+            idxs.remove(i)
+            if len(idxs) >= 3:
+                a, b, c = np.random.choice(idxs, 3, replace=False)
             else:
-                a, b, c = candidates[0], candidates[0], candidates[0]
+                a, b, c = idxs[0], idxs[0], idxs[0]
 
-            for j in range(dim):
+            for j in range(D):
                 sig = 1 if np.random.rand() < 0.5 else -1
                 mu = sig * np.random.rand() * E
 
                 if np.random.rand() < Ep:
-                    # Exploration
                     X_new[i, j] = X[b, j] + mu * (X[c, j] - X[a, j])
                 else:
-                    # Exploitation
-                    weight = current_iter / max_iter
-                    term1 = (weight * gb_sol[j] + (1 - weight) * X[a, j])
-                    term2 = X[b, j]
-                    mean_val = (term1 + term2) / 2.0
-                    diff_val = mu * np.abs((X[c, j] + X[a, j] + X[b, j]) / 3.0 - X[i, j])
-                    X_new[i, j] = mean_val + diff_val
+                    w = curr / m_iter
+                    t1 = (w * g_best[j] + (1 - w) * X[a, j])
+                    t2 = X[b, j]
+                    val_m = (t1 + t2) / 2.0
+                    val_d = mu * np.abs((X[c, j] + X[a, j] + X[b, j]) / 3.0 - X[i, j])
+                    X_new[i, j] = val_m + val_d
 
-            # 边界检查
-            X_new[i] = np.clip(X_new[i], lb, ub)
+            X_new[i] = np.clip(X_new[i], l, u)
 
-            # 评估与更新
-            if evaluations < max_fes:
-                new_fit = cec_instance.evaluate(X_new[i, :], fobj)
-                evaluations += 1
+            if evals < max_e:
+                n_fit = cec.evaluate(X_new[i, :], obj_f)
+                evals += 1
 
-                if new_fit < fitness[i]:
-                    fitness[i] = new_fit
+                if n_fit < fit[i]:
+                    fit[i] = n_fit
                     X[i, :] = X_new[i, :].copy()
-
-                    if new_fit < gb_fit:
-                        gb_fit = new_fit
-                        gb_sol = X[i, :].copy()
+                    if n_fit < g_val:
+                        g_val = n_fit
+                        g_best = X[i, :].copy()
             else:
                 break
 
-        # 每代记录一次收敛值
-        conv_curve.append(gb_fit)
+        curve.append(g_val)
 
-    return gb_fit, gb_sol, np.array(conv_curve)
-
-
-#并行 Worker
-def worker_fgo(run_idx, cp_no, max_fes, ub, lb, dim, func_id):
-
-    local_cec = CEC2014(dim)
-
-    # 运行算法
-    best_score, best_pos, conv_curve = FGO(cp_no, max_fes, ub, lb, dim, func_id, local_cec)
-
-    return run_idx, best_score, conv_curve
+    return g_val, g_best, np.array(curve)
 
 
-#运行控制与测试代码
-def run_single_function(func_id, CP_no=50, MaxFEs=25050, RUN_NO=20, dim=10, plot=True):
-    """
-    单函数测试
-    """
-    start_time = time.time()
-    lb, ub, dim = get_functions_details_cec(func_id)
-    optimal = func_id * 100
+def p_task(rid, pop, m_fes, u, l, D, fid):
+    c_inst = CEC2014(D)
+    s, p, c = fgo_algo(pop, m_fes, u, l, D, fid, c_inst)
+    return rid, s, c
 
-    # 容器初始化
-    results_list = [None] * RUN_NO  # 用于按顺序存储结果
 
-    # 并行执行
-    with ProcessPoolExecutor() as executor:
-        futures = []
-        for j in range(RUN_NO):
-            futures.append(executor.submit(worker_fgo, j, CP_no, MaxFEs, ub, lb, dim, func_id))
+def run_exp(fid, N=50, M_FES=25050, R=20, D=10, plot_flg=True):
+    t0 = time.time()
+    l, u, D = get_bound(fid)
+    opt = fid * 100
 
-        # 结果
-        for future in as_completed(futures):
-            r_idx, r_score, r_curve = future.result()
-            results_list[r_idx] = (r_score, r_curve)
+    res = [None] * R
 
-            error = r_score - optimal
-            print(f"  Run {r_idx + 1:2d}/{RUN_NO} Completed. Fitness = {r_score:.4e}")
+    with ProcessPoolExecutor() as ex:
+        futs = []
+        for j in range(R):
+            futs.append(ex.submit(p_task, j, N, M_FES, u, l, D, fid))
 
-    # 整理数据
-    fitness = np.zeros(RUN_NO)
-    convergence_curves = []
+        for ft in as_completed(futs):
+            try:
+                idx, sc, cr = ft.result()
+                res[idx] = (sc, cr)
+                print(f"  F{fid} Run {idx + 1} finished. Val: {sc:.4e}")
+            except Exception as e:
+                print(f"  Error in run: {e}")
 
-    for i in range(RUN_NO):
-        if results_list[i] is not None:
-            fitness[i] = results_list[i][0]
-            convergence_curves.append(results_list[i][1])
+    fits = np.zeros(R)
+    curves = []
+
+    for k in range(R):
+        if res[k]:
+            fits[k] = res[k][0]
+            curves.append(res[k][1])
         else:
-            fitness[i] = np.inf  # 标记失败
+            fits[k] = np.inf
 
-    # 导出数据到 CSV
-    save_data_to_csv(func_id, convergence_curves, RUN_NO)
+    save_csv(fid, curves, R)
 
-    elapsed_time = time.time() - start_time
-    avg_time = elapsed_time / RUN_NO
+    valid = fits[fits != np.inf]
+    t_end = time.time() - t0
 
-    # 结果统计
-    valid_fitness = fitness[fitness != np.inf]
-
-    # 初始化统计变量
-    avg_error = np.inf
-    std_error = np.inf
-    best_error_val = np.inf
-
-    if len(valid_fitness) > 0:
-        best_fitness = np.min(valid_fitness)
-        worst_fitness = np.max(valid_fitness)
-        avg_fitness = np.mean(valid_fitness)
-        std_fitness = np.std(valid_fitness)
-
-        avg_error = avg_fitness - optimal
-        std_error = std_fitness
-        best_error_val = best_fitness - optimal
+    if len(valid) > 0:
+        avg_v = np.mean(valid)
+        std_v = np.std(valid)
+        best_v = np.min(valid)
+        print(f"F{fid} Stats  Avg: {avg_v:.4e}, Std: {std_v:.4e}, Best: {best_v:.4e}, Time: {t_end:.2f}s")
     else:
-        # 如果全部失败
-        avg_error = np.inf
-        std_error = np.inf
-        best_fitness = np.inf
-        best_error_val = np.inf
+        print(f"F{fid} Failed.")
 
-    print(f"函数 F{func_id} 统计:")
-    print(f"  平均误差: {avg_error:.4e}")
-    print(f"  标准差:   {std_error:.4e}")
-    print(f"  最优误差: {best_error_val:.4e}")
-    print(f"  总耗时:   {elapsed_time:.2f}s")
-
-    # 绘图并保存
-    if plot and convergence_curves:
+    if plot_flg and curves:
         plt.figure(figsize=(10, 6))
+        ml = min(len(x) for x in curves)
+        t_curves = [x[:ml] for x in curves]
+        x_ax = np.arange(1, ml + 1)
 
-        min_len = min(len(c) for c in convergence_curves)
-        trimmed_curves = [c[:min_len] for c in convergence_curves]
-        iterations = np.arange(1, min_len + 1)
+        for tc in t_curves:
+            plt.semilogy(x_ax, tc, 'lightgray', alpha=0.5, linewidth=0.5)
 
-        # 绘制所有运行的灰色细线
-        for curve in trimmed_curves:
-            plt.semilogy(iterations, curve, 'lightgray', alpha=0.5, linewidth=0.5)
+        avg_c = np.mean(t_curves, axis=0)
+        plt.semilogy(x_ax, avg_c, 'b-', linewidth=2, label='Mean')
 
-        # 绘制平均线
-        mean_curve = np.mean(trimmed_curves, axis=0)
-        plt.semilogy(iterations, mean_curve, 'b-', linewidth=2, label='Mean Fitness')
+        bst_idx = np.argmin(fits)
+        plt.semilogy(x_ax, t_curves[bst_idx], 'r--', linewidth=1.5, label='Best')
 
-        # 绘制最佳运行线
-        best_run_idx = np.argmin(fitness)
-        plt.semilogy(iterations, trimmed_curves[best_run_idx], 'r--', linewidth=1.5, label='Best Run')
-
-        plt.xlabel('Generations')
-        plt.ylabel('Fitness (Log Scale)')
-        plt.title(f'FGO Convergence - F{func_id}')
+        plt.title(f'Convergence F{fid}')
         plt.legend()
-        plt.grid(True, which="both", alpha=0.3)
+        plt.grid(True, alpha=0.3)
         plt.tight_layout()
 
-        # 保存图片
-        img_name = os.path.join(DATA_DIR, f'FGO_F{func_id:02d}_Plot.png')
-        plt.savefig(img_name, dpi=1200)
+        pname = os.path.join(res_path, f'FGO F{fid:02d} Plot.png')
+        plt.savefig(pname, dpi=1200)
         plt.close()
 
 
-def main():
-
-    FUNC_NUM = 1  # 单次测试的函数ID
-    DIM = 10  # 维度
-    POP_SIZE = 50  # 种群大小
-    MAX_FES = 25050  # 最大评估次数
-    N_RUNS = 20  # 独立运行次数
-
-    # "single" 跑单个, "full" 跑 F1-F30
-    TEST_MODE = "full"
-
-    if TEST_MODE == "single":
-        run_single_function(
-            func_id=FUNC_NUM,
-            CP_no=POP_SIZE,
-            MaxFEs=MAX_FES,
-            RUN_NO=N_RUNS,
-            dim=DIM,
-            plot=True
-        )
-    elif TEST_MODE == "full":
-        Fun_id = list(range(1, 31))
-        for fid in Fun_id:
-            run_single_function(fid, POP_SIZE, MAX_FES, N_RUNS, DIM, plot=True)
-
 if __name__ == "__main__":
-    main()
+    ids = list(range(1, 31))
+    for i in ids:
+        run_exp(i, N=50, M_FES=25050, R=20, D=10)
