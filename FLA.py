@@ -6,278 +6,193 @@ import pandas as pd
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-DATA_DIR = "results_data_FLA"
+OUT_PATH = "results_data_FLA"
+
+def init_x(n, d, u, l):
+    u = np.array(u).flatten()
+    l = np.array(l).flatten()
+    if len(u) == 1:
+        return np.random.rand(n, d) * (u[0] - l[0]) + l[0]
+    pos = np.zeros((n, d))
+    for i in range(d):
+        pos[:, i] = np.random.rand(n) * (u[i] - l[i]) + l[i]
+    return pos
 
 
-def initialization(search_agents_no, dim, ub, lb):
+def get_lims(fid):
+    d = 10
+    v = 600 if fid == 11 else 100
+    return -v * np.ones(d), v * np.ones(d), d
 
-    ub = np.array(ub).flatten()
-    lb = np.array(lb).flatten()
-    boundary_no = len(ub)
 
-    if boundary_no == 1:
-        positions = np.random.rand(search_agents_no, dim) * (ub[0] - lb[0]) + lb[0]
+def export_res(fid, data, opt):
+    data.sort(key=lambda x: x[0])
+    sc = [x[1] for x in data]
+    cv = [x[2] for x in data]
+
+    if cv:
+        ml = max(len(c) for c in cv)
+        tmp = []
+        for c in cv:
+            pad = np.pad(c, (0, ml - len(c)), 'edge') if len(c) < ml else c
+            tmp.append(pad)
+
+        df = pd.DataFrame(np.array(tmp).T, columns=[f'Run_{i + 1}' for i in range(len(sc))])
+        df.to_csv(os.path.join(OUT_PATH, f'FLA_F{fid:02d}_Raw.csv'), index_label='Iter')
+
+    sc = np.array(sc)
+    v_sc = sc[sc != np.inf]
+
+    if len(v_sc) > 0:
+        bst = np.min(v_sc) - opt
+        avg = np.mean(v_sc) - opt
+        std = np.std(v_sc)
+        print(f"F{fid:02d} | Best: {bst:.4e} | Avg: {avg:.4e} | Std: {std:.4e}")
     else:
-        positions = np.zeros((search_agents_no, dim))
-        for i in range(dim):
-            ub_i = ub[i]
-            lb_i = lb[i]
-            positions[:, i] = np.random.rand(search_agents_no) * (ub_i - lb_i) + lb_i
-    return positions
+        print(f"F{fid:02d} | Failed")
 
-
-def get_functions_details_cec(func_id):
-    """
-    获取CEC2014函数的边界信息
-    """
-    dim = 10
-    if func_id == 11:
-        lb = -600 * np.ones(dim)
-        ub = 600 * np.ones(dim)
-    else:
-        lb = -100 * np.ones(dim)
-        ub = 100 * np.ones(dim)
-    return lb, ub, dim
-
-
-def save_data_and_plot(func_id, results_list, optimal_val):
-
-    # 提取数据并按 Run 编号排序
-    results_list.sort(key=lambda x: x[0])
-
-    fitness_vals = []
-    convergence_curves = []
-
-    for _, score, curve in results_list:
-        fitness_vals.append(score)
-        convergence_curves.append(curve)
-
-    run_no = len(fitness_vals)
-    fitness_vals = np.array(fitness_vals)
-
-    if convergence_curves:
-        # 填充数据以防长度不一
-        max_len = max(len(c) for c in convergence_curves)
-        padded_curves = []
-        for curve in convergence_curves:
-            if len(curve) < max_len:
-                padded = np.pad(curve, (0, max_len - len(curve)), 'edge')
-                padded_curves.append(padded)
-            else:
-                padded_curves.append(curve)
-
-        data = np.array(padded_curves).T
-        columns = [f'Run_{i + 1}' for i in range(run_no)]
-        df = pd.DataFrame(data, columns=columns)
-        df.index.name = 'Iteration'
-
-        csv_path = os.path.join(DATA_DIR, f'FLA_F{func_id:02d}_Raw_Data.csv')
-        df.to_csv(csv_path)
-
-    # 统计指标
-    valid_fitness = fitness_vals[fitness_vals != np.inf]
-
-    if len(valid_fitness) > 0:
-        best_val = np.min(valid_fitness)
-        worst_val = np.max(valid_fitness)
-        avg_val = np.mean(valid_fitness)
-        std_val = np.std(valid_fitness)
-        avg_error = avg_val - optimal_val
-        std_error = std_val
-        best_error = best_val - optimal_val
-    else:
-        best_val = worst_val = avg_val = std_val = avg_error = std_error = best_error = np.inf
-
-    print(f"F{func_id:02d}")
-    print(f"  最优误差: {best_error:.4e}")
-    print(f"  平均误差:  {avg_error:.4e}")
-    print(f"  标准差:  {std_error:.4e}")
-
-    # 绘图
-    if convergence_curves:
+    if cv:
         plt.figure(figsize=(10, 6))
+        ml = min(len(c) for c in cv)
+        t_cv = [c[:ml] for c in cv]
+        x_ax = np.arange(1, ml + 1)
 
-        # 统一长度用于绘图
-        min_len = min(len(c) for c in convergence_curves)
-        trimmed_curves = [c[:min_len] for c in convergence_curves]
-        iterations = np.arange(1, min_len + 1)
+        for c in t_cv:
+            plt.semilogy(x_ax, c, 'lightgray', alpha=0.5, lw=0.5)
 
-        # 绘制灰色背景线
-        for curve in trimmed_curves:
-            plt.semilogy(iterations, curve, 'lightgray', alpha=0.5, linewidth=0.5)
+        plt.semilogy(x_ax, np.mean(t_cv, axis=0), 'b-', lw=2)
+        plt.semilogy(x_ax, t_cv[np.argmin(sc)], 'r--', lw=1.5)
 
-        # 绘制平均线
-        mean_curve = np.mean(trimmed_curves, axis=0)
-        plt.semilogy(iterations, mean_curve, 'b-', linewidth=2, label='Mean Fitness')
-
-        # 绘制最佳线
-        best_run_idx = np.argmin(fitness_vals)
-        plt.semilogy(iterations, trimmed_curves[best_run_idx], 'r--', linewidth=1.5, label='Best Run')
-
-        plt.xlabel('Iterations')
-        plt.ylabel('Fitness (Log Scale)')
-        plt.title(f'FLA Convergence - F{func_id}')
-        plt.legend()
-        plt.grid(True, which="both", alpha=0.3)
+        plt.grid(True, alpha=0.3)
         plt.tight_layout()
-
-        img_path = os.path.join(DATA_DIR, f'FLA_F{func_id:02d}_Plot.png')
-        plt.savefig(img_path, dpi=1200)
+        plt.savefig(os.path.join(OUT_PATH, f'FLA_F{fid:02d}_Plot.png'), dpi=300)
         plt.close()
 
 
-# FLA
-def FLA(pop_size, max_iter, ub, lb, dim, fobj, cec_instance):
-
-    # 边界处理
+def run_fla(pop, mit, ub, lb, dim, fid, cec):
     ub = np.array(ub).flatten()
     lb = np.array(lb).flatten()
     if len(ub) == 1: ub = np.full(dim, ub[0])
     if len(lb) == 1: lb = np.full(dim, lb[0])
 
-    # 初始化
-    gb_sol = np.zeros(dim)
-    gb_fit = np.inf
-    conv_curve = np.zeros(max_iter)
+    gbest = np.zeros(dim)
+    gfit = np.inf
+    curve = np.zeros(mit)
+    Ne = 5
 
-    Ne = 5  # 洪水阶段移除的差解数量
+    X = init_x(pop, dim, ub, lb)
+    fit = np.zeros(pop)
 
-    X = initialization(pop_size, dim, ub, lb)
-    fitness = np.zeros(pop_size)
+    for i in range(pop):
+        fit[i] = cec.evaluate(X[i, :], fid)
+        if fit[i] < gfit:
+            gfit = fit[i]
+            gbest = X[i, :].copy()
 
-    # 初始评估
-    for i in range(pop_size):
-        fitness[i] = cec_instance.evaluate(X[i, :], fobj)
-        if fitness[i] < gb_fit:
-            gb_fit = fitness[i]
-            gb_sol = X[i, :].copy()
-
-    # 主循环
-    for it in range(max_iter):
+    for it in range(mit):
         t = it + 1
-        PK = ((np.sqrt(max_iter * (t ** 2) + 1) + (1.2 / t)) ** (-2 / 3)) * (1.2 / t)
+        pk = ((np.sqrt(mit * (t ** 2) + 1) + (1.2 / t)) ** (-2 / 3)) * (1.2 / t)
 
-        X_new = X.copy()
-        min_fit = np.min(fitness)
-        max_fit = np.max(fitness)
-        denominator = max_fit - min_fit + np.finfo(float).eps
+        Xnew = X.copy()
+        fmin = np.min(fit)
+        fmax = np.max(fit)
+        denom = fmax - fmin + np.finfo(float).eps
 
-        # Phase I: Regular Movement
-        for i in range(pop_size):
-            ind = np.random.randint(0, pop_size)
-            while ind == i:
-                ind = np.random.randint(0, pop_size)
+        for i in range(pop):
+            idx = np.random.randint(0, pop)
+            while idx == i:
+                idx = np.random.randint(0, pop)
 
-            Pe = ((fitness[i] - min_fit) / denominator) ** 2
+            pe = ((fit[i] - fmin) / denom) ** 2
             r1 = np.random.rand()
             r2 = np.random.rand()
 
-            if fitness[i] < fitness[ind]:
-                dist_neighbor = X[i] - X[ind]
-                dist_best = X[i] - gb_sol
-                X_new[i] = X[i] + r1 * dist_neighbor + r2 * PK * dist_best
+            if fit[i] < fit[idx]:
+                dn = X[i] - X[idx]
+                db = X[i] - gbest
+                Xnew[i] = X[i] + r1 * dn + r2 * pk * db
             else:
-                dist_neighbor = X[ind] - X[i]
-                dist_best = gb_sol - X[i]
-                X_new[i] = X[i] + r1 * dist_neighbor + r2 * PK * dist_best
+                dn = X[idx] - X[i]
+                db = gbest - X[i]
+                Xnew[i] = X[i] + r1 * dn + r2 * pk * db
 
-            X_new[i] = np.clip(X_new[i], lb, ub)
-            new_fit = cec_instance.evaluate(X_new[i, :], fobj)
+            Xnew[i] = np.clip(Xnew[i], lb, ub)
+            nf = cec.evaluate(Xnew[i, :], fid)
 
-            if new_fit < fitness[i]:
-                fitness[i] = new_fit
-                X[i, :] = X_new[i, :].copy()
-                if new_fit < gb_fit:
-                    gb_fit = new_fit
-                    gb_sol = X[i, :].copy()
+            if nf < fit[i]:
+                fit[i] = nf
+                X[i, :] = Xnew[i, :].copy()
+                if nf < gfit:
+                    gfit = nf
+                    gbest = X[i, :].copy()
 
-        # Phase II: Flooding
-        Pt = np.abs(np.sin(np.random.rand() / t))
+        pt = np.abs(np.sin(np.random.rand() / t))
 
-        if np.random.rand() < Pt:
-            sorted_indices = np.argsort(fitness)
-            worst_indices = sorted_indices[-Ne:]
+        if np.random.rand() < pt:
+            s_idx = np.argsort(fit)
+            w_idx = s_idx[-Ne:]
 
-            for idx in worst_indices:
-                rand_vec = lb + np.random.rand(dim) * (ub - lb)
-                X[idx, :] = gb_sol + np.random.rand() * 0.1 * rand_vec
-                X[idx, :] = np.clip(X[idx, :], lb, ub)
+            for k in w_idx:
+                rv = lb + np.random.rand(dim) * (ub - lb)
+                X[k, :] = gbest + np.random.rand() * 0.1 * rv
+                X[k, :] = np.clip(X[k, :], lb, ub)
 
-                fitness[idx] = cec_instance.evaluate(X[idx, :], fobj)
-                if fitness[idx] < gb_fit:
-                    gb_fit = fitness[idx]
-                    gb_sol = X[idx, :].copy()
+                fit[k] = cec.evaluate(X[k, :], fid)
+                if fit[k] < gfit:
+                    gfit = fit[k]
+                    gbest = X[k, :].copy()
 
-        conv_curve[it] = gb_fit
+        curve[it] = gfit
 
-    return gb_fit, gb_sol, conv_curve
+    return gfit, gbest, curve
 
 
-# 并行 Worker 函数
-def worker_fla(func_id, run_idx, pop_size, max_iter, ub, lb, dim):
-
-    # 局部实例化，防止进程冲突
-    cec_local = CEC2014(dim)
-
-    # 运行算法
-    best_score, best_pos, conv_curve = FLA(pop_size, max_iter, ub, lb, dim, func_id, cec_local)
-
-    return func_id, run_idx, best_score, conv_curve
-
+def task(fid, rid, p, m, u, l, d):
+    try:
+        c = CEC2014(d)
+        s, _, cr = run_fla(p, m, u, l, d, fid, c)
+        return fid, rid, s, cr
+    except Exception as e:
+        print(e)
+        return fid, rid, np.inf, []
 
 
 def main():
+    dim = 10
+    pop = 50
+    iters = 500
+    runs = 20
 
-    DIM = 10
-    POP_SIZE = 50
-    MAX_ITER = 500
-    N_RUNS = 20
+    full_test = True
+    f_list = list(range(1, 31)) if full_test else [1]
 
-    # 模式选择: "single" 跑单个, "full" 跑 F1-F30
-    TEST_MODE = "full"
-    SINGLE_FUNC_ID = 1
+    print(f"Running FLA. Mode: {'Full' if full_test else 'Single'}")
+    t0 = time.time()
 
-    # 确定要跑的函数列表
-    if TEST_MODE == "full":
-        func_ids = list(range(1, 31))
-    else:
-        func_ids = [SINGLE_FUNC_ID]
+    db = {f: [] for f in f_list}
 
-    start_time_total = time.time()
+    with ProcessPoolExecutor() as ex:
+        jobs = []
+        for f in f_list:
+            l, u, _ = get_lims(f)
+            for r in range(runs):
+                jobs.append(ex.submit(task, f, r, pop, iters, u, l, dim))
 
-    all_results = {fid: [] for fid in func_ids}
+        cnt = 0
+        tot = len(jobs)
+        for j in as_completed(jobs):
+            f, r, s, c = j.result()
+            db[f].append((r, s, c))
+            cnt += 1
+            if cnt % 20 == 0:
+                print(f"Done: {cnt}/{tot}")
 
-    total_tasks = len(func_ids) * N_RUNS
-    finished_count = 0
+    for f in f_list:
+        if db[f]:
+            export_res(f, db[f], f * 100)
 
-    with ProcessPoolExecutor() as executor:
-        futures = []
+    print(f"Total Time: {time.time() - t0:.2f}s")
 
-        # 遍历所有函数和所有运行
-        for fid in func_ids:
-            lb, ub, _ = get_functions_details_cec(fid)
-            for r in range(N_RUNS):
-                # 提交任务
-                futures.append(executor.submit(worker_fla, fid, r, POP_SIZE, MAX_ITER, ub, lb, DIM))
-
-
-        # 收集结果
-        for future in as_completed(futures):
-            # 获取返回值
-            fid, r_idx, score, curve = future.result()
-
-            # 存入对应函数的列表中
-            all_results[fid].append((r_idx, score, curve))
-
-    # 所有数据都在 all_results 字典里
-    for fid in func_ids:
-        results = all_results[fid]
-
-        optimal = fid * 100
-        save_data_and_plot(fid, results, optimal)
-
-    total_time = time.time() - start_time_total
-    print(f"耗时: {total_time:.2f}s")
 
 if __name__ == "__main__":
     main()
