@@ -42,9 +42,7 @@ def get_functions_details_cec(func_id):
 
 
 def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
-    """
-    Improved Crested Porcupine Optimizer
-    """
+
     # 边界处理
     ub = np.array(ub).flatten()
     lb = np.array(lb).flatten()
@@ -65,11 +63,11 @@ def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
     alpha = 0.5
     Tf = 0.8
 
-    # 策略2: 外部存档初始化
+    # 外部存档初始化
     archive = []
-    max_archive_size = int(1.4 * pop_size)  # 与 LSHADE 一致
+    max_archive_size = int(1.4 * pop_size)
 
-    # 策略4: 参数记忆初始化 (SHADE-style)
+    # 参数记忆初始化
     H = 5  # 记忆大小
     memory_F = [0.5] * H
     memory_CR = [0.5] * H
@@ -82,7 +80,7 @@ def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
     for i in range(pop_size):
         fitness[i] = cec_instance.evaluate(X[i, :], fobj)
 
-    # 初始排序 (为了 P-best)
+    # 初始排序
     sorted_idx = np.argsort(fitness)
     X = X[sorted_idx]
     fitness = fitness[sorted_idx]
@@ -99,7 +97,7 @@ def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
     while t < t_max and gb_fit != opt:
         r2 = np.random.rand()
 
-        # 策略3: 精英保留的循环种群缩减
+        # 精英保留的循环种群缩减
         rem_value = t % (t_max / T)
         cycle_progress = rem_value / (t_max / T)
 
@@ -107,16 +105,16 @@ def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
         active_pop_size = int(N_min + (N - N_min) * (1 - cycle_progress))
         active_pop_size = max(N_min, min(active_pop_size, N))
 
-        # 关键: 排序确保缩减时移除差解
+        # 排序确保缩减时移除差解
         sorted_idx = np.argsort(fitness[:pop_size])
         X[:pop_size] = X[sorted_idx]
         fitness[:pop_size] = fitness[sorted_idx]
         Xp[:pop_size] = Xp[sorted_idx]
 
-        # 策略1: P-best 参数 (前 15% 的优良个体)
+        # P-best 参数 (前 15% 的优良个体)
         p_best_size = max(2, int(0.15 * active_pop_size))
 
-        # 策略4: 生成自适应参数
+        # 生成自适应参数
         F_list = []
         CR_list = []
         for _ in range(active_pop_size):
@@ -124,13 +122,13 @@ def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
             mu_F = memory_F[ri]
             mu_CR = memory_CR[ri]
 
-            # 生成 F (Cauchy 分布)
+            # 生成 F (Cauchy)
             F = -1
             while F <= 0:
                 F = np.random.standard_cauchy() * 0.1 + mu_F
             F = min(F, 1.0)
 
-            # 生成 CR (Normal 分布)
+            # 生成 CR (Normal)
             CR = np.random.normal(mu_CR, 0.1)
             CR = np.clip(CR, 0, 1)
 
@@ -164,15 +162,15 @@ def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
                 U2 = (np.random.rand(dim) < 0.5) * 2 - 1
                 S = np.random.rand() * U2
 
-                if np.random.rand() < Tf:  # 策略1 & 2: 改进的第三防御机制
+                if np.random.rand() < Tf:  # 改进的第三防御机制
                     St = np.exp(fitness[i] / (np.sum(fitness[:active_pop_size]) + 1e-20))
                     S = S * Yt * St
 
-                    # 1. 选择 P-best (精英引导)
+                    # 1. 选择 P-best
                     p_best_idx = np.random.randint(0, p_best_size)
                     x_pbest = X[p_best_idx, :]
 
-                    # 2. 从 [种群 + 存档] 中选择个体 (多样性)
+                    # 2. 从种群 存档中选择个体
                     if len(archive) > 0:
                         cand_pool = np.vstack((X[:active_pop_size], np.array(archive)))
                     else:
@@ -182,10 +180,10 @@ def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
                     r2_idx = np.random.randint(len(cand_pool))
                     x_r2 = cand_pool[r2_idx]
 
-                    # 改进公式: current-to-pbest with archive
+                    # current-to-pbest with archive
                     X[i, :] = (1 - U1) * X[i, :] + U1 * (x_pbest + F_list[i] * St * (X[r1, :] - x_r2) - S)
 
-                else:  # 第四防御机制 (物理攻击) - 保持原版
+                else:  # 第四防御机制 原版
                     Mt = np.exp(fitness[i] / (np.sum(fitness[:active_pop_size]) + 1e-20))
                     vt = X[i, :]
                     rand_idx = np.random.randint(active_pop_size)
@@ -197,10 +195,9 @@ def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
             # 边界处理
             X[i, :] = np.clip(X[i, :], lb, ub)
 
-            # 评估
             nF = cec_instance.evaluate(X[i, :], fobj)
 
-            # 策略2: 更新存档 & 贪婪选择
+            # 更新存档 & 贪婪选择
             if nF < fitness[i]:  # 发现更好的解
                 # 将旧解存入存档
                 if len(archive) < max_archive_size:
@@ -232,7 +229,7 @@ def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
             if t >= t_max:
                 break
 
-        # 策略4: 更新参数记忆
+        # 更新参数记忆
         if len(S_F) > 0 and np.sum(delta_f) > 0:
             weights = np.array(delta_f) / np.sum(delta_f)
 
@@ -255,9 +252,7 @@ def Improved_CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
 
 
 def CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
-    """
-    Crested Porcupine Optimizer
-    """
+
     # 确保边界是数组
     ub = np.array(ub).flatten()
     lb = np.array(lb).flatten()
@@ -280,7 +275,7 @@ def CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
 
     # 初始化种群位置
     X = initialization(pop_size, dim, ub, lb)
-    t = 0  # 函数评估计数器
+    t = 0  # 函数评估计数
 
     # 评估初始种群
     fitness = np.zeros(pop_size)
@@ -392,10 +387,8 @@ def CPO(pop_size, t_max, ub, lb, dim, fobj, cec_instance):
 
 
 def compare_CPO_vs_ICPO(func_id, CP_no=50, Tmax=25000, RUN_NO=30, dim=10):
-    """
-    比较原版 CPO 和改进版 ICPO 的性能
-    """
-    print(f"性能对比测试: CPO vs ICPO - F{func_id}")
+
+    print(f"CPO vs ICPO - F{func_id}")
     print(f"种群大小: {CP_no} | 最大FES: {Tmax} | 运行次数: {RUN_NO} | 维度: {dim}")
 
     # 初始化CEC2014
@@ -428,7 +421,6 @@ def compare_CPO_vs_ICPO(func_id, CP_no=50, Tmax=25000, RUN_NO=30, dim=10):
         best_score, _, conv_curve = Improved_CPO(CP_no, Tmax, ub, lb, dim, func_id, cec_instance)
         icpo_fitness[j] = best_score
         icpo_curves.append(conv_curve)
-        print(f"  Run {j + 1:2d}/{RUN_NO}: {best_score:.6e} (误差: {best_score - optimal:.6e})")
     icpo_time = time.time() - icpo_start
 
     # 导出ICPO数据
@@ -498,10 +490,10 @@ def compare_CPO_vs_ICPO(func_id, CP_no=50, Tmax=25000, RUN_NO=30, dim=10):
 
 if __name__ == "__main__":
 
-    DIM = 10  # 问题维度
+    DIM = 10  # 维度
     MAX_FES = 25050  # 最大函数评估次数
-    POP_SIZE = 50  # 种群大小
-    N_RUNS = 20  # 运行次数
+    POP_SIZE = 50
+    N_RUNS = 20
 
     FUNC_IDS = range(1,30)
 
@@ -526,7 +518,6 @@ if __name__ == "__main__":
         plt.close('all')
 
 
-    # 最终汇总打印
     print(f"{'F_ID':<5} | {'CPO Mean':<20} | {'ICPO Mean':<20} | {'Winner':<10}")
 
     for s in all_final_stats:
